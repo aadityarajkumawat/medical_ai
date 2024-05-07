@@ -1,7 +1,6 @@
 from crewai import Agent, Task, Crew, Process
 from langchain_openai import ChatOpenAI
 
-
 import os
 from dotenv import load_dotenv
 
@@ -28,7 +27,6 @@ discussion = """
 """
 
 corruption_level = 5
-cc = "sinus infection"
 
 decider = Agent(
     role="decider",
@@ -83,6 +81,32 @@ chief_complaint_finder = Agent(
     verbose=True,
     allow_delegation=False,
 )
+
+task_2 = Task(
+    description=f"""
+----
+Below is a medical encounter between a {age}
+and {sex} patient and a doctor done over chat.
+----
+Medical Encounter
+----
+{chat}
+----
+
+Using the above dialogue, find the chief complaint of the patient.
+Respond in the tag [RESPONSE : "<chief_complaint_here>"]. Make sure to use the "[]" when outputting tags.
+----
+Chief Complaint
+----
+
+""",
+    expected_output="output the chief complaint",
+    agent=chief_complaint_finder,
+)
+
+cc = task_2.execute()
+cc = cc[cc.find("RESPONSE") + len('RESPONSE : "') : cc.find('"]')]
+print(cc)
 
 task_1 = Task(
     description=f"""
