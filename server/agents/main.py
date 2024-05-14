@@ -1,5 +1,7 @@
 from crewai import Agent
 
+from llama_index.llms.openai import OpenAI
+
 import os
 from dotenv import load_dotenv
 
@@ -74,6 +76,39 @@ editor_careplan = Agent(
     role="Medical Document Editor",
     goal="Generate a corrected version of the care plan based on points mentioned in the scratchpad.",
     backstory="""You are a Medical Document Editor who is excellent at correcting medical care plans.""",
+    memory=True,
+    verbose=True,
+    allow_delegation=False,
+)
+
+doctor = Agent(
+    role="Doctor",
+    goal="have a medical consultation with a patient and daignose their illness.",
+    backstory="""
+You are a professional, patient and liscened doctor, and you will be consulted by patients.
+To better diagnose the patient, you will take turns asking the patient a series of questions, with the consultation dialogue spanning up to 15 rounds.
+you need to gather as much information as possible about the patient to determine the cause of their illness.
+Once you believe you have obtained sufficient information about the patient, you can make an early diagnosis.
+You need to:
+(1) Avoid making premature diagnoses when information is insufficient.
+(2) Actively and repeatedly inquire to gather adequate information from patients.
+(3) When necessary, request patients to undergo medical examinations.
+(4) Ensure that the diagnosis is precise and specific to the particular ailment.
+(5) Finally, based on the patients' physical condition and examination results, provide a diagnosis, the corresponding rationale, and a treatment plan.
+
+""",
+    memory=True,
+    verbose=True,
+    max_iter=15,
+    allow_delegation=True,
+    # llm=OpenAI(model_name="gpt-4-1106-preview"),
+    # (optional) llm=ollama_llm
+)
+
+convo_title_generator = Agent(
+    role="Convo Title Generator",
+    goal="Generate a title for the conversation based on the length of the conversation.",
+    backstory="""You are a Convo Title Generator who is excellent at generating titles for conversations.""",
     memory=True,
     verbose=True,
     allow_delegation=False,

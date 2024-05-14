@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+    height: 100%;
+    width: 100%;
+}
+
+.menu::after {
+    position: absolute;
+    content: "";
+    background-color: rgb(250, 250, 250);
+    width: 20px;
+    height: 20px;
+    right: 10px;
+    bottom: -10px;
+    transform: rotate(45deg);
+    z-index: 1;
+    border-right: 1px solid rgb(212 212 216);
+    border-bottom: 1px solid rgb(212 212 216);
+    transition: all 0.3;
+    animation: popup forwards 0.3s;
+}
+
+.popup-anim {
+
+    animation: popup forwards 0.3s;
+}
+
+@keyframes popup {
+    0% {
+        opacity: 0;
+        scale: 0.5;
+    }
+
+    100% {
+        opacity: 1;
+        scale: 1;
+    }
+}
+
+.marked p {
+    @apply mb-5
+}

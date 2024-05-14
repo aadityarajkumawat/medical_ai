@@ -1,23 +1,485 @@
+# import os
+# from dotenv import load_dotenv
+
+# load_dotenv()
+
+# chat = """
+# Doctor-Patient Chat
+# Patient: I have a sinus infection and need something to knock it out.
+# Doctor: Hi melissa thank you for starting a visit. I am so sorry to hear about your sinus infection. How long have you had the symptoms for?
+# Patient: Since Sunday
+# Doctor: Ah I see. Which symptoms do you have at present?
+# Patient: My face is swollen, my cheeks hurt, my eyelids are swollen, and I am running a slight fever, and I can feel something draining down the back of my throat
+# """
+
+# summary = summarizer(22, "Female", chat)
+# print(summary)
+
+# careplan = generate_final_careplan(22, "Female", chat)
+# print(careplan)
+
+from __future__ import annotations
+from flask import Flask, request
+import math, random, os
+from dotenv import load_dotenv
+from typing import List
+
+from sqlalchemy import ForeignKey
+from sqlalchemy import Integer
+from sqlalchemy.orm import Mapped
+from sqlalchemy.orm import mapped_column
+from sqlalchemy.orm import DeclarativeBase
+
 from engine.summarizer import summarizer
 from engine.careplan import generate_final_careplan
 
-import os
-from dotenv import load_dotenv
+from tasks.doctor_convo import get_doctor_response
+from tasks.convo_title import get_convo_title
 
 load_dotenv()
+
 os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
 
-chat = """
-Doctor-Patient Chat
-Patient: I have a sinus infection and need something to knock it out.
-Doctor: Hi melissa thank you for starting a visit. I am so sorry to hear about your sinus infection. How long have you had the symptoms for?
-Patient: Since Sunday
-Doctor: Ah I see. Which symptoms do you have at present?
-Patient: My face is swollen, my cheeks hurt, my eyelids are swollen, and I am running a slight fever, and I can feel something draining down the back of my throat
-"""
+app = Flask(__name__)
 
-summary = summarizer(22, "Female", chat)
-print(summary)
+import datetime
+import uuid
+from sqlalchemy import (
+    create_engine,
+    String,
+    Column,
+    DateTime,
+    JSON,
+    Integer,
+    ForeignKey,
+)
+from sqlalchemy.orm import declarative_base, relationship, mapped_column
+from sqlalchemy.orm import sessionmaker
 
-careplan = generate_final_careplan(22, "Female", chat)
-print(careplan)
+from flask_cors import CORS
+
+# add cors
+# Add CORS
+CORS(app)
+
+
+def get_time():
+    return datetime.datetime.now()
+
+
+def gen_id() -> str:
+    return str(uuid.uuid4())
+
+
+import os
+
+DB_USER = os.getenv("PGUSER")
+DB_PASSWORD = os.getenv("PGPASSWORD")
+DB_HOST = os.getenv("PGHOST")
+DB_PORT = os.getenv("PGPORT")
+DB_NAME = os.getenv("PGDATABASE")
+
+engine = create_engine(
+    f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+)
+
+base = declarative_base()
+
+factory = sessionmaker(bind=engine)
+session = factory()
+
+
+class UserProfile(base):
+    __tablename__ = "user_profile"
+    id = Column("id", String, primary_key=True)
+    age = Column("age", Integer, nullable=False)
+    gender = Column("gender", String, nullable=False)
+
+    def as_dict(self):
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+
+class MedicalConvo(base):
+    __tablename__ = "medical_convo"
+    id = Column("id", String, primary_key=True, default=gen_id)
+    user_id = Column("user_id", String)
+    convo_name = Column("convo_name", String)
+    created_at = Column("created_at", DateTime, default=get_time)
+    updated_at = Column("updated_at", DateTime, default=get_time)
+    convo: Mapped[List["Convo"]] = relationship(back_populates="medical_convo")
+    summary: Mapped[List["Summary"]] = relationship(back_populates="medical_convo")
+    care_plan: Mapped[List["CarePlan"]] = relationship(back_populates="medical_convo")
+
+    def as_dict(self):
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+
+class Convo(base):
+    __tablename__ = "convo"
+    id = Column("id", String, primary_key=True, default=gen_id)
+    user_id = Column("user_id", String)
+    convo_id = mapped_column(ForeignKey("medical_convo.id"))
+    role = Column("role", String)
+    content = Column("content", String)
+    medical_convo: Mapped["MedicalConvo"] = relationship(
+        "MedicalConvo", back_populates="convo"
+    )
+    created_at = Column("created_at", DateTime, default=get_time)
+    updated_at = Column("updated_at", DateTime, default=get_time)
+
+    def as_dict(self):
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+
+class Summary(base):
+    __tablename__ = "summary"
+    id = Column("id", String, primary_key=True, default=gen_id)
+    convo_id = mapped_column(ForeignKey("medical_convo.id"))
+    summary = Column("summary", String, default="")
+    medical_convo: Mapped["MedicalConvo"] = relationship(
+        "MedicalConvo", back_populates="summary"
+    )
+    created_at = Column("created_at", DateTime, default=get_time)
+
+    def as_dict(self):
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+
+class CarePlan(base):
+    __tablename__ = "care_plan"
+    id = Column("id", String, primary_key=True, default=gen_id)
+    convo_id = mapped_column(ForeignKey("medical_convo.id"))
+    careplan = Column("careplan", String, default="")
+    medical_convo: Mapped["MedicalConvo"] = relationship(
+        "MedicalConvo", back_populates="care_plan"
+    )
+    created_at = Column("created_at", DateTime, default=get_time)
+
+    def as_dict(self):
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+
+# class TechnicianRequest(base):
+#     __tablename__ = "TechnicianRequest"
+#     id = Column("id", String, primary_key=True)
+#     name = Column("name", String)
+#     email = Column("email", String)
+#     phone = Column("phone", String)
+#     zipcode = Column("zipcode", String)
+#     timestamp = Column("timestamp", DateTime)
+
+
+engine.connect()
+
+base.metadata.create_all(engine)
+
+
+@app.route("/")
+def hello_world():
+    # mp.track("some form of id", "homepage", {"some": "property"})
+    return "<p>Hello, World!</p>"
+
+
+@app.route("/get-convo/<convo_id>")
+def get_convo(convo_id):
+    medical_convo = (
+        session.query(MedicalConvo).where(MedicalConvo.id == convo_id).first()
+    )
+    # order by created_at desc
+    convo = (
+        session.query(Convo)
+        .where(Convo.convo_id == medical_convo.id)
+        .order_by(Convo.created_at.asc())
+        .order_by(Convo.role.desc())
+        .all()
+    )
+
+    convo = [c.as_dict() for c in convo]
+
+    return {"convo": convo}
+
+
+@app.route("/get-care-plan/<convo_id>")
+def get_care_plan(convo_id):
+    careplan = (
+        session.query(CarePlan)
+        .where(CarePlan.convo_id == convo_id)
+        .order_by(CarePlan.created_at.desc())
+        .first()
+    )
+
+    convo = session.query(MedicalConvo).where(MedicalConvo.id == convo_id).first()
+    user_id = convo.user_id
+    user = session.query(UserProfile).where(UserProfile.id == user_id).first()
+    convos = (
+        session.query(Convo)
+        .where(Convo.convo_id == convo_id)
+        .order_by(Convo.created_at.asc())
+        .order_by(Convo.role.desc())
+        .all()
+    )
+
+    last_chat = convos[-1]
+
+    def generate_new_careplan():
+        # generate summary
+        chat = ""
+        for con in convos:
+            chat += con.role + ": " + con.content
+        print(chat)
+        care_plan_content = generate_final_careplan(user.age, user.gender, chat)
+        cp = CarePlan(convo_id=convo_id, careplan=care_plan_content)
+        session.add(cp)
+        session.commit()
+        return cp
+
+    if careplan != None:
+        careplan_is_stale = (last_chat.as_dict()["created_at"]).timestamp() > (
+            careplan.as_dict()["created_at"]
+        ).timestamp()
+        if careplan_is_stale:
+            cp = generate_new_careplan()
+            return {"careplan": cp.as_dict()}
+        else:
+            return {"careplan": careplan.as_dict()}
+    else:
+        summ = generate_new_careplan()
+        return {"careplan": summ.as_dict()}
+
+
+@app.route("/get-summary/<convo_id>")
+def get_summary(convo_id):
+    summary = (
+        session.query(Summary)
+        .where(Summary.convo_id == convo_id)
+        .order_by(Summary.created_at.desc())
+        .first()
+    )
+
+    convo = session.query(MedicalConvo).where(MedicalConvo.id == convo_id).first()
+    user_id = convo.user_id
+    user = session.query(UserProfile).where(UserProfile.id == user_id).first()
+    convos = (
+        session.query(Convo)
+        .where(Convo.convo_id == convo_id)
+        .order_by(Convo.created_at.asc())
+        .order_by(Convo.role.desc())
+        .all()
+    )
+
+    last_chat = convos[-1]
+
+    def generate_new_summary():
+        # generate summary
+        chat = ""
+        for con in convos:
+            chat += con.role + ": " + con.content
+        print(chat)
+        summary_content = summarizer(user.age, user.gender, chat)
+        summ = Summary(convo_id=convo_id, summary=summary_content)
+        session.add(summ)
+        session.commit()
+        return summ
+
+    if summary != None:
+        print("COOL", last_chat.as_dict()["created_at"].timestamp())
+        summary_is_stale = (last_chat.as_dict()["created_at"]).timestamp() > (
+            summary.as_dict()["created_at"]
+        ).timestamp()
+        if summary_is_stale:
+            summ = generate_new_summary()
+            return {"summary": summ.as_dict()}
+        else:
+            return {"summary": summary.as_dict()}
+    else:
+        summ = generate_new_summary()
+        return {"summary": summ.as_dict()}
+
+
+@app.route("/medical-convo/<user_id>")
+def medical_convo(user_id):
+    medical_convo = (
+        session.query(MedicalConvo).where(MedicalConvo.user_id == user_id).all()
+    )
+    medical_convos = [mc.as_dict() for mc in medical_convo]
+    return {"medical_convos": medical_convos}
+
+
+@app.route("/get-medical-convo/<convo_id>")
+def get_medical_convo(convo_id):
+    medical_convo = (
+        session.query(MedicalConvo).where(MedicalConvo.id == convo_id).first()
+    )
+    return {"medical_convo": medical_convo.as_dict()}
+
+
+@app.route("/medical-convo", methods=["POST"])
+def create_medical_convo():
+    json = request.json
+    print(json)
+
+    medical_convo = MedicalConvo(
+        user_id=json["user_id"],
+        convo_name="Untitled",
+    )
+
+    session.add(medical_convo)
+
+    session.commit()
+
+    return {"status": "success", "id": medical_convo.id}
+
+
+@app.route("/convo-chat", methods=["POST"])
+def convo_chat():
+    json = request.json
+
+    convo_id = json["convo_id"]
+    role = "user"
+    content = json["content"]
+    user_id = json["user_id"]
+    history = json["history"]
+    convo_length = json["len"]
+
+    convo_name = "Untitled"
+
+    if convo_length < 3:
+        title = get_convo_title(history)
+        convo_name = title
+
+        session.query(MedicalConvo).where(MedicalConvo.id == convo_id).update(
+            {MedicalConvo.convo_name: convo_name}
+        )
+        session.commit()
+
+    print("HISTORY", history)
+
+    convo = Convo(
+        user_id=user_id,
+        convo_id=convo_id,
+        role=role,
+        content=content,
+    )
+
+    response = get_doctor_response(history, content)
+
+    response_convo = Convo(
+        user_id=user_id,
+        convo_id=convo_id,
+        role="assistant",
+        content=response,
+    )
+
+    session.add(convo)
+    session.add(response_convo)
+
+    session.commit()
+
+    return {"status": "success", "response": response}
+
+
+@app.route("/user-profile/<user_id>")
+def user_profile(user_id):
+    user_profile = session.query(UserProfile).where(UserProfile.id == user_id).first()
+    if not user_profile:
+        return {"user": None}
+    return {"user": user_profile.as_dict()}
+
+
+@app.route("/onboard-user", methods=["POST"])
+def onboard_user():
+    json = request.json
+
+    age = json["age"]
+    gender = json["gender"]
+    user_id = json["user_id"]
+
+    user_profile = UserProfile(age=age, gender=gender, id=user_id)
+
+    session.add(user_profile)
+    session.commit()
+
+    return {"status": "success"}
+
+
+# @app.route("/technician-request", methods=["POST"])
+# def technician_request():
+#     json = request.json
+#     print(json)
+
+#     technician_request = TechnicianRequest(
+#         id=gen_id(),
+#         name=json["name"],
+#         email=json["email"],
+#         phone=json["phone"],
+#         zipcode=json["zipcode"],
+#         timestamp=datetime.datetime.utcnow(),
+#     )
+
+#     session.add(technician_request)
+
+#     session.commit()
+
+#     # mp.track(technician_request.id, "technician-request", json)
+
+#     return {"status": "success"}
+
+
+# @app.route("/chat", methods=["POST"])
+# def chat():
+#     json = request.json
+#     """
+#     messages structure
+#     Array like, with each element being a dictionary with the following keys:
+#     {
+#         "messages": [
+#             {
+#                 "role": "user",
+#                 "content": "What is the capital of France?"
+#             },
+#             {
+#                 "role": "assistant",
+#                 "content": "The capital of France is Paris."
+#             }
+#         ]
+#     }
+#     """
+#     messages = json["messages"]
+#     query = json["query"]
+#     chat_id = json["id"]
+
+#     # messages json to List of ChatMessage aka List[ChatMessage] aka history
+#     history = json_to_history(messages)
+
+#     print(history)
+
+#     response = get_response(query, history)
+
+#     chat_query = Chat(
+#         id=gen_id(),
+#         chat_id=chat_id,
+#         role="user",
+#         content=query,
+#         order=len(messages) + 1,
+#     )
+
+#     chat_response = Chat(
+#         id=gen_id(),
+#         chat_id=chat_id,
+#         role="assistant",
+#         content=response["response"],
+#         order=len(messages) + 2,
+#     )
+
+#     session.add(chat_query)
+#     session.add(chat_response)
+
+#     session.commit()
+
+#     print("SENT RESPONSE", response)
+
+#     return response
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5001, debug=True)
