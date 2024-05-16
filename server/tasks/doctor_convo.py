@@ -1,28 +1,27 @@
+from langchain_openai import ChatOpenAI
 from agents.main import doctor
 from crewai import Task
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+
+llm = ChatOpenAI(model_name="gpt-3.5-turbo", max_tokens=100)
 
 
-def doctor_convo_task(chat, followup):
-    task = Task(
-        agent=doctor,
-        description=f"""You are a doctor who is excellent at diagnosing patients based on their symptoms. You are having a conversation with a patient over chat, use the chat to understand the patient's symptoms and provide a medical diagnosis.
-
-        --- Conversation History ---
-        {chat}
-        --- Conversation History ---
-
-        --- Follow up query ---
-        {followup}
-        --- Follow up query ---
-        """,
-        expected_output="Question the patient about their symptoms and provide a medical diagnosis based on the conversation.",
-    )
-
-    return task
+def doctor_convo_task(chat: list[BaseMessage]):
+    print(chat)
+    return llm(chat).content
 
 
-def get_doctor_response(chat, followup):
-    print(chat, followup)
-    task = doctor_convo_task(chat, followup)
-    response = task.execute()
-    return response
+def translate_to_somali(text):
+    return llm(
+        [
+            HumanMessage(
+                f"Convert the following text to somali:\nText:{text}\nTranslation:"
+            )
+        ]
+    ).content
+
+
+def get_doctor_response(chat):
+    task = doctor_convo_task(chat)
+    d = translate_to_somali(task)
+    return d

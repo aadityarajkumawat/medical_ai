@@ -19,10 +19,13 @@
 # print(careplan)
 
 from __future__ import annotations
+import threading
 from flask import Flask, request
 import math, random, os
 from dotenv import load_dotenv
 from typing import List
+
+from langchain_core.messages import HumanMessage, AIMessage
 
 from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
@@ -36,11 +39,42 @@ from engine.careplan import generate_final_careplan
 from tasks.doctor_convo import get_doctor_response
 from tasks.convo_title import get_convo_title
 
+import requests
+
 load_dotenv()
 
 os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
 
 app = Flask(__name__)
+
+SYSTEM_PROMPT = """You are a Reasoning + Acting (React) Chain Bot. You have to be interactive so ask the queries one by one from the user to reach to the final answer. Please provide a single Thought and single Action to the user so that the user can search the query of the action and provide you with the observation.
+
+For example the chain would be like this:
+
+User: Hi, I've been experiencing persistent headaches.
+Assistant: Have you been drinking plenty of water?
+User: Yes, I have been drinking plenty of water.
+Assistant: What is your sleep schedule like?
+User: I try to get min 8 hours of sleep.
+Assistant: What is your screen time like?
+User: I spends long hours in front of a computer screen but doesn't report significant eye strain.
+Assistant: Considering your screen time, prolonged exposure to screens could lead to digital eye strain and headaches.
+User: I will try to reduce my screen time.
+Assistant: [STOP]
+
+User: Hi, I've been having knee pain lately.
+Assistant: Have you recently engaged in any strenuous physical activity?
+User: No, I haven't.
+Assistant: Do you have any history of previous knee injuries or surgeries?
+User: Yes, I injured my knee playing sports several years ago.
+Assistant: Have you noticed any swelling or instability in the knee?
+User: Yes, I experience occasional swelling and feelings of instability.
+Assistant: Given your history of a previous knee injury and current symptoms, there may be underlying issues such as osteoarthritis or ligament damage. I advise you to consult with a healthcare professional for a proper diagnosis and treatment plan.
+User: Thank you, I will schedule an appointment with my doctor.
+Assistant: [STOP]
+
+"""
+
 
 import datetime
 import uuid
@@ -78,6 +112,8 @@ DB_PASSWORD = os.getenv("PGPASSWORD")
 DB_HOST = os.getenv("PGHOST")
 DB_PORT = os.getenv("PGPORT")
 DB_NAME = os.getenv("PGDATABASE")
+
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 
 engine = create_engine(
     f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
@@ -154,6 +190,42 @@ class CarePlan(base):
         "MedicalConvo", back_populates="care_plan"
     )
     created_at = Column("created_at", DateTime, default=get_time)
+
+    def as_dict(self):
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+
+class WhatsApp(base):
+    __tablename__ = "whatsapp"
+    id = Column("id", String, primary_key=True, default=gen_id)
+    from_number = Column("from_number", String)
+    gender = Column("gender", String)
+    age = Column("age", Integer)
+    content = Column("content", String)
+    role = Column("role", String)
+    created_at = Column("created_at", DateTime, default=get_time)
+
+    def as_dict(self):
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+
+class WhatsappCareplan(base):
+    __tablename__ = "whatsapp_careplan"
+    id = Column("id", String, primary_key=True, default=gen_id)
+    from_number = Column("from_number", String)
+    created_at = Column("created_at", DateTime, default=get_time)
+    careplan = Column("careplan", String)
+
+    def as_dict(self):
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+
+class WhatsappSummary(base):
+    __tablename__ = "whatsapp_summary"
+    id = Column("id", String, primary_key=True, default=gen_id)
+    from_number = Column("from_number", String)
+    created_at = Column("created_at", DateTime, default=get_time)
+    summary = Column("summary", String)
 
     def as_dict(self):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
@@ -402,84 +474,423 @@ def onboard_user():
     return {"status": "success"}
 
 
-# @app.route("/technician-request", methods=["POST"])
-# def technician_request():
-#     json = request.json
-#     print(json)
+@app.route("/bot")
+def bot():
+    query_params = request.args
 
-#     technician_request = TechnicianRequest(
-#         id=gen_id(),
-#         name=json["name"],
-#         email=json["email"],
-#         phone=json["phone"],
-#         zipcode=json["zipcode"],
-#         timestamp=datetime.datetime.utcnow(),
-#     )
+    mode = query_params.get("hub.mode")
+    challenge = query_params.get("hub.challenge")
+    verify_token = query_params.get("hub.verify_token")
 
-#     session.add(technician_request)
+    if mode == "subscribe" and verify_token == VERIFY_TOKEN:
+        return challenge
 
-#     session.commit()
-
-#     # mp.track(technician_request.id, "technician-request", json)
-
-#     return {"status": "success"}
+    return "Invalid Request"
 
 
-# @app.route("/chat", methods=["POST"])
-# def chat():
-#     json = request.json
-#     """
-#     messages structure
-#     Array like, with each element being a dictionary with the following keys:
-#     {
-#         "messages": [
-#             {
-#                 "role": "user",
-#                 "content": "What is the capital of France?"
-#             },
-#             {
-#                 "role": "assistant",
-#                 "content": "The capital of France is Paris."
-#             }
-#         ]
-#     }
-#     """
-#     messages = json["messages"]
-#     query = json["query"]
-#     chat_id = json["id"]
+@app.route("/bot", methods=["POST"])
+def bot_post():
+    print("cool")
+    json = request.json
 
-#     # messages json to List of ChatMessage aka List[ChatMessage] aka history
-#     history = json_to_history(messages)
+    value = json["entry"][0]["changes"][0]["value"]
 
-#     print(history)
+    if not "messages" in value:
+        return {"status": "success"}
 
-#     response = get_response(query, history)
+    messages = value["messages"]
 
-#     chat_query = Chat(
-#         id=gen_id(),
-#         chat_id=chat_id,
-#         role="user",
-#         content=query,
-#         order=len(messages) + 1,
-#     )
+    text = messages[0]["text"]["body"]
+    from_number = messages[0]["from"]
+    print(text)
 
-#     chat_response = Chat(
-#         id=gen_id(),
-#         chat_id=chat_id,
-#         role="assistant",
-#         content=response["response"],
-#         order=len(messages) + 2,
-#     )
+    # check if careplan is being generated!
+    ca = (
+        session.query(WhatsappCareplan)
+        .where(WhatsappCareplan.from_number == from_number)
+        .where(WhatsappCareplan.careplan == "generating")
+        .first()
+    )
+    if ca is not None:
+        print("CAREPLAN GENERATING!")
+        return {"status": "success"}
 
-#     session.add(chat_query)
-#     session.add(chat_response)
+    cs = (
+        session.query(WhatsappSummary)
+        .where(WhatsappSummary.from_number == from_number)
+        .where(WhatsappSummary.summary == "generating")
+        .first()
+    )
 
-#     session.commit()
+    if cs is not None:
+        print("SUMMARY GENERATING!")
+        return {"status": "success"}
 
-#     print("SENT RESPONSE", response)
+    if text == "/help":
+        print("HELP!")
+        requests.post(
+            f"https://graph.facebook.com/v19.0/311721782025837/messages",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
+            },
+            json={
+                "messaging_product": "whatsapp",
+                "to": from_number,
+                "text": {
+                    "body": "You can use the following commands to interact:\n\n/new: Start a new conversation\n\n/careplan: Get a careplan based on your conversation\n\n/[age][gender(M or F)]: To update profile details\n\n/help: Get help on how to use the bot\n"
+                },
+            },
+        )
+        return {"status": "success"}
 
-#     return response
+    if len(text) == 4 and text[0] == "/" and text != "/new":
+        print("REGISTERING AGE AND GENDER!")
+        if text[1].isdigit() and text[2].isdigit() and not text[3].isdigit():
+            age = int(text[1] + text[2])
+            gender = text[3].lower()
+
+            requests.post(
+                f"https://graph.facebook.com/v19.0/311721782025837/messages",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
+                },
+                json={
+                    "messaging_product": "whatsapp",
+                    "to": from_number,
+                    "text": {"body": "Thanks for providing your age and gender!"},
+                },
+            )
+
+            wh = WhatsApp(
+                from_number=from_number,
+                content="Thanks for providing your age and gender!",
+                role="assistant",
+                gender=gender,
+                age=age,
+            )
+
+            session.add(wh)
+            session.commit()
+
+        return {"status": "success"}
+
+    history = ""
+
+    # get a message
+    msg = session.query(WhatsApp).where(WhatsApp.from_number == from_number).first()
+
+    if msg is not None:
+        print("CHECK IF AGE AND GENDER ARE SET!")
+        # check
+        mm = (
+            session.query(WhatsApp)
+            .where(WhatsApp.from_number == from_number)
+            .where(WhatsApp.age != None)
+            .where(WhatsApp.gender != None)
+            .first()
+        )
+        if mm is None:
+            print("ASKING FOR AGE AND GENDER!")
+            requests.post(
+                f"https://graph.facebook.com/v19.0/311721782025837/messages",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
+                },
+                json={
+                    "messaging_product": "whatsapp",
+                    "to": from_number,
+                    "text": {
+                        "body": "Please provide your age and gender in the following format (/18M, for age 18 and gender male, and /24F for age 24 and gender female)"
+                    },
+                },
+            )
+            return {"status": "success"}
+
+    if text == "/new":
+        print("STARTING NEW CONVO!")
+        requests.post(
+            f"https://graph.facebook.com/v19.0/311721782025837/messages",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
+            },
+            json={
+                "messaging_product": "whatsapp",
+                "to": from_number,
+                "text": {
+                    "body": "New conversation started! Go ahead and explain your symptoms"
+                },
+            },
+        )
+
+        # save convo to db
+        user_text = WhatsApp(from_number=from_number, content="/new", role="user")
+        session.add(user_text)
+        session.commit()
+
+        return {"status": "success"}
+    elif text == "/summary":
+        print("GETTING SUMMARY!")
+        # get history
+        last_checkpoint = (
+            session.query(WhatsApp)
+            .where(WhatsApp.from_number == from_number)
+            .where(WhatsApp.content == "/new")
+            .order_by(WhatsApp.created_at.desc())
+            .first()
+        )
+        if last_checkpoint is None:
+            history_list = []
+            history = ""
+            requests.post(
+                f"https://graph.facebook.com/v19.0/311721782025837/messages",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
+                },
+                json={
+                    "messaging_product": "whatsapp",
+                    "to": from_number,
+                    "text": {"body": "Not enough information to generate summary"},
+                },
+            )
+        else:
+            print(last_checkpoint.as_dict())
+            # find all convos with this user after this checkpoint
+            convos = (
+                session.query(WhatsApp)
+                .where(WhatsApp.from_number == from_number)
+                .where(WhatsApp.created_at > last_checkpoint.created_at)
+                .order_by(WhatsApp.created_at.asc())
+                .order_by(WhatsApp.role.desc())
+                .all()
+            )
+            history_list = [c.as_dict() for c in convos]
+            history = ""
+
+            for h in history_list:
+                history += h["role"] + ": " + h["content"] + "\n"
+
+            # get gender, age and chat
+            mm = (
+                session.query(WhatsApp)
+                .where(WhatsApp.from_number == from_number)
+                .where(WhatsApp.age != None)
+                .where(WhatsApp.gender != None)
+                .first()
+            )
+
+            print(history)
+
+            if mm is not None:
+                age = mm.age
+                gender = mm.gender
+
+                s = WhatsappSummary(from_number=from_number, summary="generating")
+                session.add(s)
+                session.commit()
+
+                carep = summarizer(age, gender, history)
+
+                requests.post(
+                    f"https://graph.facebook.com/v19.0/311721782025837/messages",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
+                    },
+                    json={
+                        "messaging_product": "whatsapp",
+                        "to": from_number,
+                        "text": {"body": carep},
+                    },
+                )
+
+                f = (
+                    session.query(WhatsappSummary)
+                    .where(WhatsappSummary.from_number == from_number)
+                    .update({WhatsappSummary.summary: carep})
+                )
+                session.commit()
+
+                print(f)
+
+                return {"status": "success"}
+            else:
+                return {"status": "success"}
+
+        return {"status": "success"}
+    elif text == "/careplan":
+        print("GETTING CAREPLAN!")
+        # get history
+        last_checkpoint = (
+            session.query(WhatsApp)
+            .where(WhatsApp.from_number == from_number)
+            .where(WhatsApp.content == "/new")
+            .order_by(WhatsApp.created_at.desc())
+            .first()
+        )
+        if last_checkpoint is None:
+            history_list = []
+            history = ""
+            requests.post(
+                f"https://graph.facebook.com/v19.0/311721782025837/messages",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
+                },
+                json={
+                    "messaging_product": "whatsapp",
+                    "to": from_number,
+                    "text": {"body": "Not enough information to generate careplan"},
+                },
+            )
+        else:
+            print(last_checkpoint.as_dict())
+            # find all convos with this user after this checkpoint
+            convos = (
+                session.query(WhatsApp)
+                .where(WhatsApp.from_number == from_number)
+                .where(WhatsApp.created_at > last_checkpoint.created_at)
+                .order_by(WhatsApp.created_at.asc())
+                .order_by(WhatsApp.role.desc())
+                .all()
+            )
+            history_list = [c.as_dict() for c in convos]
+            history = ""
+
+            for h in history_list:
+                history += h["role"] + ": " + h["content"] + "\n"
+
+            # get gender, age and chat
+            mm = (
+                session.query(WhatsApp)
+                .where(WhatsApp.from_number == from_number)
+                .where(WhatsApp.age != None)
+                .where(WhatsApp.gender != None)
+                .first()
+            )
+
+            print(history)
+
+            if mm is not None:
+                age = mm.age
+                gender = mm.gender
+
+                s = WhatsappCareplan(from_number=from_number, careplan="generating")
+                session.add(s)
+                session.commit()
+
+                care_plan_content = generate_final_careplan(age, gender, history)
+
+                # careplan_thread()
+                # carep = "Summary generation in progress. Please check back in a few minutes."
+
+                requests.post(
+                    f"https://graph.facebook.com/v19.0/311721782025837/messages",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
+                    },
+                    json={
+                        "messaging_product": "whatsapp",
+                        "to": from_number,
+                        "text": {
+                            "body": care_plan_content.replace("[STOP]", "").replace(
+                                "--\nCorrected Care Plan\n--", ""
+                            )
+                        },
+                    },
+                )
+
+                f = (
+                    session.query(WhatsappCareplan)
+                    .where(WhatsappCareplan.from_number == from_number)
+                    .update({WhatsappCareplan.careplan: care_plan_content})
+                )
+                session.commit()
+
+                print(f)
+
+                return {"status": "success"}
+            else:
+                return {"status": "success"}
+
+        return {"status": "success"}
+
+    print("this is nice")
+
+    latest_start = (
+        session.query(WhatsApp)
+        .where(WhatsApp.from_number == from_number)
+        .where(WhatsApp.content == "/new")
+        .order_by(WhatsApp.created_at.desc())
+        .first()
+    )
+    convos = (
+        session.query(WhatsApp)
+        .where(WhatsApp.from_number == from_number)
+        .where(WhatsApp.created_at > latest_start.created_at)
+        .order_by(WhatsApp.created_at.asc())
+        .order_by(WhatsApp.role.desc())
+        .all()
+    )
+
+    history = ""
+    history_list = []
+    i = 0
+    for h in convos:
+        if i == 0:
+            print("dffdfdfdfsgdwsrever")
+            history_list.append(HumanMessage(SYSTEM_PROMPT + f"\nUser: {h.content}"))
+        else:
+            history_list.append(
+                HumanMessage(h.content) if h.role == "user" else AIMessage(h.content)
+            )
+        history += "Patient" if h.role == "user" else "Doctor" + ": " + h.content + "\n"
+        i += 1
+
+    history += "Patient: " + text
+    if len(convos) > 0:
+        history_list.append(HumanMessage(text))
+    else:
+        history_list.append(HumanMessage(SYSTEM_PROMPT + f"\nUser: {text}"))
+
+    print("HISTORY", history)
+
+    doc_response = get_doctor_response(history_list)
+
+    response = doc_response
+
+    requests.post(
+        f"https://graph.facebook.com/v19.0/311721782025837/messages",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
+        },
+        json={
+            "messaging_product": "whatsapp",
+            "to": from_number,
+            "text": {"body": response},
+            # "context": {"message_id": id},
+        },
+    )
+
+    # save convo to db
+    user_text = WhatsApp(from_number=from_number, content=text, role="user")
+    assistant_text = WhatsApp(
+        from_number=from_number, content=response, role="assistant"
+    )
+
+    session.add(user_text)
+    session.add(assistant_text)
+
+    session.commit()
+
+    return {"status": "success"}
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001, debug=True)
+    app.run(host="0.0.0.0", port=5001)

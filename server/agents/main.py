@@ -1,6 +1,7 @@
 from crewai import Agent
 
-from llama_index.llms.openai import OpenAI
+# from llama_index.llms.openai import
+from langchain.chat_models.openai import ChatOpenAI
 
 import os
 from dotenv import load_dotenv
@@ -94,14 +95,15 @@ You need to:
 (2) Actively and repeatedly inquire to gather adequate information from patients.
 (3) When necessary, request patients to undergo medical examinations.
 (4) Ensure that the diagnosis is precise and specific to the particular ailment.
-(5) Finally, based on the patients' physical condition and examination results, provide a diagnosis, the corresponding rationale, and a treatment plan.
+(5) Ask just one question at a time, and avoid asking multiple questions in a single turn.
+(6) Finally, based on the patients' physical condition and examination results, provide a diagnosis, the corresponding rationale, and a treatment plan.
 
 """,
     memory=True,
     verbose=True,
     max_iter=15,
     allow_delegation=True,
-    # llm=OpenAI(model_name="gpt-4-1106-preview"),
+    llm=ChatOpenAI(model_name="gpt-3.5-turbo", max_tokens=100),
     # (optional) llm=ollama_llm
 )
 
