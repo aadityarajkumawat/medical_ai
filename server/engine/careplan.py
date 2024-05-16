@@ -37,4 +37,11 @@ def generate_final_careplan(age, sex, chat, scratchpad="", discussion=""):
     final_careplan_task = final_careplan(age, sex, chat, careplan, scratchpad)
     final_plan = final_careplan_task.execute()
 
+    # clean up the final summary
+    index_of_medication = final_plan.find("Medications")
+    # remove stuff before this index
+    final_plan = final_plan[index_of_medication:]
+
+    final_plan = final_plan.replace("[STOP]", "")
+
     return final_plan

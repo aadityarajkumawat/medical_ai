@@ -49,4 +49,11 @@ def summarizer(age, sex, chat, corruption_level=5, scratchpad="", discussion="")
 
     summary = final_summary.execute()
 
+    # clean up the final summary
+    index_of_medication = summary.find("Demographics")
+    # remove stuff before this index
+    summary = summary[index_of_medication:]
+
+    summary = summary.replace("[STOP]", "")
+
     return summary

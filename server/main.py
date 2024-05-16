@@ -25,7 +25,7 @@ import math, random, os
 from dotenv import load_dotenv
 from typing import List
 
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
@@ -87,6 +87,7 @@ from sqlalchemy import (
     Integer,
     ForeignKey,
 )
+import datetime as dt
 from sqlalchemy.orm import declarative_base, relationship, mapped_column
 from sqlalchemy.orm import sessionmaker
 
@@ -474,6 +475,21 @@ def onboard_user():
     return {"status": "success"}
 
 
+def send_whatsapp_msg(from_number: str, msg: str):
+    requests.post(
+        f"https://graph.facebook.com/v19.0/311721782025837/messages",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
+        },
+        json={
+            "messaging_product": "whatsapp",
+            "to": from_number,
+            "text": {"body": msg},
+        },
+    )
+
+
 @app.route("/bot")
 def bot():
     query_params = request.args
@@ -493,6 +509,10 @@ def bot_post():
     print("cool")
     json = request.json
 
+    # import json as j
+
+    # print(j.dumps(json, indent=4))
+
     value = json["entry"][0]["changes"][0]["value"]
 
     if not "messages" in value:
@@ -502,6 +522,17 @@ def bot_post():
 
     text = messages[0]["text"]["body"]
     from_number = messages[0]["from"]
+    timestamp = messages[0]["timestamp"]
+
+    # find if there's any response after this timestamp
+    
+    msg_t = dt.datetime.fromtimestamp(int(timestamp))
+
+    g = session.query(WhatsApp).where(WhatsApp.from_number == from_number).where(WhatsApp.created_at > msg_t).first()
+    if g is not None:
+        print("DUPLICATE MESSAGE!")
+        return {"status": "success"}
+
     print(text)
 
     # check if careplan is being generated!
@@ -528,19 +559,9 @@ def bot_post():
 
     if text == "/help":
         print("HELP!")
-        requests.post(
-            f"https://graph.facebook.com/v19.0/311721782025837/messages",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
-            },
-            json={
-                "messaging_product": "whatsapp",
-                "to": from_number,
-                "text": {
-                    "body": "You can use the following commands to interact:\n\n/new: Start a new conversation\n\n/careplan: Get a careplan based on your conversation\n\n/[age][gender(M or F)]: To update profile details\n\n/help: Get help on how to use the bot\n"
-                },
-            },
+        send_whatsapp_msg(
+            from_number,
+            msg="You can use the following commands to interact:\n\n/new: Start a new conversation\n\n/careplan: Get a careplan based on your conversation\n\n/[age][gender(M or F)]: To update profile details\n\n/help: Get help on how to use the bot\n",
         )
         return {"status": "success"}
 
@@ -550,17 +571,8 @@ def bot_post():
             age = int(text[1] + text[2])
             gender = text[3].lower()
 
-            requests.post(
-                f"https://graph.facebook.com/v19.0/311721782025837/messages",
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
-                },
-                json={
-                    "messaging_product": "whatsapp",
-                    "to": from_number,
-                    "text": {"body": "Thanks for providing your age and gender!"},
-                },
+            send_whatsapp_msg(
+                from_number, msg="Thanks for providing your age and gender!"
             )
 
             wh = WhatsApp(
@@ -593,37 +605,17 @@ def bot_post():
         )
         if mm is None:
             print("ASKING FOR AGE AND GENDER!")
-            requests.post(
-                f"https://graph.facebook.com/v19.0/311721782025837/messages",
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
-                },
-                json={
-                    "messaging_product": "whatsapp",
-                    "to": from_number,
-                    "text": {
-                        "body": "Please provide your age and gender in the following format (/18M, for age 18 and gender male, and /24F for age 24 and gender female)"
-                    },
-                },
+            send_whatsapp_msg(
+                from_number,
+                msg="Please provide your age and gender in the following format (/18M, for age 18 and gender male, and /24F for age 24 and gender female)",
             )
             return {"status": "success"}
 
     if text == "/new":
         print("STARTING NEW CONVO!")
-        requests.post(
-            f"https://graph.facebook.com/v19.0/311721782025837/messages",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
-            },
-            json={
-                "messaging_product": "whatsapp",
-                "to": from_number,
-                "text": {
-                    "body": "New conversation started! Go ahead and explain your symptoms"
-                },
-            },
+        send_whatsapp_msg(
+            from_number,
+            msg="New conversation started! Go ahead and explain your symptoms",
         )
 
         # save convo to db
@@ -645,17 +637,8 @@ def bot_post():
         if last_checkpoint is None:
             history_list = []
             history = ""
-            requests.post(
-                f"https://graph.facebook.com/v19.0/311721782025837/messages",
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
-                },
-                json={
-                    "messaging_product": "whatsapp",
-                    "to": from_number,
-                    "text": {"body": "Not enough information to generate summary"},
-                },
+            send_whatsapp_msg(
+                from_number, msg="Not enough information to generate summary"
             )
         else:
             print(last_checkpoint.as_dict())
@@ -695,18 +678,7 @@ def bot_post():
 
                 carep = summarizer(age, gender, history)
 
-                requests.post(
-                    f"https://graph.facebook.com/v19.0/311721782025837/messages",
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
-                    },
-                    json={
-                        "messaging_product": "whatsapp",
-                        "to": from_number,
-                        "text": {"body": carep},
-                    },
-                )
+                send_whatsapp_msg(from_number, carep)
 
                 f = (
                     session.query(WhatsappSummary)
@@ -735,18 +707,11 @@ def bot_post():
         if last_checkpoint is None:
             history_list = []
             history = ""
-            requests.post(
-                f"https://graph.facebook.com/v19.0/311721782025837/messages",
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
-                },
-                json={
-                    "messaging_product": "whatsapp",
-                    "to": from_number,
-                    "text": {"body": "Not enough information to generate careplan"},
-                },
+
+            send_whatsapp_msg(
+                from_number, msg="Not enough information to generate careplan"
             )
+
         else:
             print(last_checkpoint.as_dict())
             # find all convos with this user after this checkpoint
@@ -785,25 +750,7 @@ def bot_post():
 
                 care_plan_content = generate_final_careplan(age, gender, history)
 
-                # careplan_thread()
-                # carep = "Summary generation in progress. Please check back in a few minutes."
-
-                requests.post(
-                    f"https://graph.facebook.com/v19.0/311721782025837/messages",
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
-                    },
-                    json={
-                        "messaging_product": "whatsapp",
-                        "to": from_number,
-                        "text": {
-                            "body": care_plan_content.replace("[STOP]", "").replace(
-                                "--\nCorrected Care Plan\n--", ""
-                            )
-                        },
-                    },
-                )
+                send_whatsapp_msg(from_number, care_plan_content)
 
                 f = (
                     session.query(WhatsappCareplan)
@@ -839,24 +786,26 @@ def bot_post():
     )
 
     history = ""
-    history_list = []
+    history_list = [
+        SystemMessage(
+            "You are a doctor, which that diagnoses patients by asking questions one at a time. Please ask the user questions to diagnose them. Users will start by describing their problem or symptoms."
+        )
+    ]
     i = 0
+    print("----------")
+    print("CONVOS", convos)
+    print("----------")
     for h in convos:
-        if i == 0:
-            print("dffdfdfdfsgdwsrever")
-            history_list.append(HumanMessage(SYSTEM_PROMPT + f"\nUser: {h.content}"))
-        else:
-            history_list.append(
-                HumanMessage(h.content) if h.role == "user" else AIMessage(h.content)
-            )
-        history += "Patient" if h.role == "user" else "Doctor" + ": " + h.content + "\n"
+        history_list.append(
+            HumanMessage(h.content) if h.role == "user" else AIMessage(h.content)
+        )
+        history += h.role + ": " + h.content + "\n"
         i += 1
 
     history += "Patient: " + text
-    if len(convos) > 0:
-        history_list.append(HumanMessage(text))
-    else:
-        history_list.append(HumanMessage(SYSTEM_PROMPT + f"\nUser: {text}"))
+    history_list.append(HumanMessage(text))
+    # else:
+    #     history_list.append(HumanMessage(SYSTEM_PROMPT + f"\nUser: {text}"))
 
     print("HISTORY", history)
 
@@ -864,19 +813,7 @@ def bot_post():
 
     response = doc_response
 
-    requests.post(
-        f"https://graph.facebook.com/v19.0/311721782025837/messages",
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
-        },
-        json={
-            "messaging_product": "whatsapp",
-            "to": from_number,
-            "text": {"body": response},
-            # "context": {"message_id": id},
-        },
-    )
+    send_whatsapp_msg(from_number, response)
 
     # save convo to db
     user_text = WhatsApp(from_number=from_number, content=text, role="user")

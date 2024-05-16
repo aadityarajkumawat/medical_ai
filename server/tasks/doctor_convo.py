@@ -21,7 +21,8 @@ def translate_to_somali(text):
     ).content
 
 
-def get_doctor_response(chat):
+def get_doctor_response(chat, translate=False):
     task = doctor_convo_task(chat)
-    d = translate_to_somali(task)
-    return d
+    if translate:
+        task = translate_to_somali(task)
+    return task
