@@ -25,6 +25,8 @@ import math, random, os
 from dotenv import load_dotenv
 from typing import List
 
+from gradio_client import Client
+
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from sqlalchemy import ForeignKey
@@ -245,6 +247,11 @@ class WhatsappSummary(base):
 engine.connect()
 
 base.metadata.create_all(engine)
+
+client = Client(
+    "https://adityaedy01-mms.hf.space/",
+    hf_token=os.getenv("HF_TOKEN"),
+)
 
 
 @app.route("/")
@@ -475,19 +482,128 @@ def onboard_user():
     return {"status": "success"}
 
 
-def send_whatsapp_msg(from_number: str, msg: str):
-    requests.post(
-        f"https://graph.facebook.com/v19.0/311721782025837/messages",
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
-        },
-        json={
-            "messaging_product": "whatsapp",
-            "to": from_number,
-            "text": {"body": msg},
-        },
+def send_whatsapp_msg(id: str, from_number: str):
+    def wr(msg: str):
+        requests.post(
+            f"https://graph.facebook.com/v19.0/{id}/messages",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
+            },
+            json={
+                "messaging_product": "whatsapp",
+                "to": from_number,
+                "text": {"body": msg},
+            },
+        )
+
+    return wr
+
+
+from pydub import AudioSegment
+
+
+def convert_wav_to_mp3(wav_file_path, mp3_file_path):
+    # Load the WAV file
+    audio = AudioSegment.from_wav(wav_file_path)
+
+    # Export as MP3
+    audio.export(mp3_file_path, format="mp3")
+    print(f"Converted {wav_file_path} to {mp3_file_path}")
+
+
+def convert_ogg_to_mp3(ogg_file_path, mp3_file_path):
+    # Load the WAV file
+    audio = AudioSegment.from_ogg(ogg_file_path)
+
+    # Export as MP3
+    audio.export(mp3_file_path, format="mp3")
+    print(f"Converted {ogg_file_path} to {mp3_file_path}")
+
+
+def speech_to_text(audio_path: str):
+    res = client.predict(
+        "Record from Mic",
+        audio_path,
+        audio_path,
+        "som (Somali)",
+        api_name="/predict",
     )
+    print("SPEECH TO TEXT:", res)
+    return res
+
+
+import uuid
+import urllib.request
+
+
+def get_whatsapp_media_by_id(id: str):
+    # get url by id
+    url = f"https://graph.facebook.com/v19.0/{id}"
+
+    headers = {
+        "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
+    }
+
+    response = requests.get(url, headers=headers)
+
+    data = response.json()
+    url = data["url"]
+
+    print(url)
+
+    # urllib.request.urlretrieve("http://www.example.com/songs/mp3.mp3", "mp3.mp3")
+
+    response = requests.get(url, headers=headers, allow_redirects=True)
+    received_name = str(uuid.uuid4()) + ".ogg"
+    print(response.content)
+    open(f"audio/{received_name}", "wb").write(response.content)
+
+    convert_ogg_to_mp3(f"audio/{received_name}", f"audio/{received_name}.mp3")
+
+    return f"audio/{received_name}.mp3"
+
+
+def send_whatsapp_audio(id: str, from_number: str):
+    def wr(audio_path: str):
+        # first upload the file
+        file_name = str(uuid.uuid5()) + ".mp3"
+        file_path = f"audio/{file_name}"
+
+        convert_wav_to_mp3(audio_path, file_name)
+
+        # upload file
+        res = requests.post(
+            url=f"https://graph.facebook.com/v19.0/{id}/messages",
+            headers={
+                "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
+            },
+            data={
+                "type": "audio/mp3",
+                "messaging_product": "whatsapp",
+            },
+            files=[
+                (
+                    "file",
+                    (
+                        file_name,
+                        open(file_path, "rb"),
+                        "audio/mpeg",
+                    ),
+                )
+            ],
+        )
+
+        uploaded = res.json()
+
+        print(uploaded)
+
+        # get file url
+        # res = requests.get(f"https://graph.facebook.com/v19.0/1155544232454984")
+
+        # send audio
+
+    return wr
 
 
 @app.route("/bot")
@@ -509,9 +625,9 @@ def bot_post():
     print("cool")
     json = request.json
 
-    # import json as j
+    import json as j
 
-    # print(j.dumps(json, indent=4))
+    print(j.dumps(json, indent=4))
 
     value = json["entry"][0]["changes"][0]["value"]
 
@@ -519,16 +635,40 @@ def bot_post():
         return {"status": "success"}
 
     messages = value["messages"]
+    meta = value["metadata"]
 
-    text = messages[0]["text"]["body"]
+    phone_id = meta["phone_number_id"]
+
     from_number = messages[0]["from"]
     timestamp = messages[0]["timestamp"]
 
+    send_audio = send_whatsapp_audio(id=phone_id, from_number=from_number)
+
+    if "audio" in messages[0]:
+        print("reply audio")
+
+        audio_received_id = messages[0]["audio"]["id"]
+
+        received_audio_file = get_whatsapp_media_by_id(audio_received_id)
+        text_received = speech_to_text(received_audio_file)
+
+        # send_audio()
+        return {"status": "success"}
+
+    text = messages[0]["text"]["body"]
+
+    send_msg = send_whatsapp_msg(id=phone_id, from_number=from_number)
+
     # find if there's any response after this timestamp
-    
+
     msg_t = dt.datetime.fromtimestamp(int(timestamp))
 
-    g = session.query(WhatsApp).where(WhatsApp.from_number == from_number).where(WhatsApp.created_at > msg_t).first()
+    g = (
+        session.query(WhatsApp)
+        .where(WhatsApp.from_number == from_number)
+        .where(WhatsApp.created_at > msg_t)
+        .first()
+    )
     if g is not None:
         print("DUPLICATE MESSAGE!")
         return {"status": "success"}
@@ -559,8 +699,7 @@ def bot_post():
 
     if text == "/help":
         print("HELP!")
-        send_whatsapp_msg(
-            from_number,
+        send_msg(
             msg="You can use the following commands to interact:\n\n/new: Start a new conversation\n\n/careplan: Get a careplan based on your conversation\n\n/[age][gender(M or F)]: To update profile details\n\n/help: Get help on how to use the bot\n",
         )
         return {"status": "success"}
@@ -571,9 +710,7 @@ def bot_post():
             age = int(text[1] + text[2])
             gender = text[3].lower()
 
-            send_whatsapp_msg(
-                from_number, msg="Thanks for providing your age and gender!"
-            )
+            send_msg(msg="Thanks for providing your age and gender!")
 
             wh = WhatsApp(
                 from_number=from_number,
@@ -605,16 +742,14 @@ def bot_post():
         )
         if mm is None:
             print("ASKING FOR AGE AND GENDER!")
-            send_whatsapp_msg(
-                from_number,
+            send_msg(
                 msg="Please provide your age and gender in the following format (/18M, for age 18 and gender male, and /24F for age 24 and gender female)",
             )
             return {"status": "success"}
 
     if text == "/new":
         print("STARTING NEW CONVO!")
-        send_whatsapp_msg(
-            from_number,
+        send_msg(
             msg="New conversation started! Go ahead and explain your symptoms",
         )
 
@@ -637,9 +772,7 @@ def bot_post():
         if last_checkpoint is None:
             history_list = []
             history = ""
-            send_whatsapp_msg(
-                from_number, msg="Not enough information to generate summary"
-            )
+            send_msg(msg="Not enough information to generate summary")
         else:
             print(last_checkpoint.as_dict())
             # find all convos with this user after this checkpoint
@@ -678,7 +811,7 @@ def bot_post():
 
                 carep = summarizer(age, gender, history)
 
-                send_whatsapp_msg(from_number, carep)
+                send_msg(carep)
 
                 f = (
                     session.query(WhatsappSummary)
@@ -708,9 +841,7 @@ def bot_post():
             history_list = []
             history = ""
 
-            send_whatsapp_msg(
-                from_number, msg="Not enough information to generate careplan"
-            )
+            send_msg(msg="Not enough information to generate careplan")
 
         else:
             print(last_checkpoint.as_dict())
@@ -750,7 +881,7 @@ def bot_post():
 
                 care_plan_content = generate_final_careplan(age, gender, history)
 
-                send_whatsapp_msg(from_number, care_plan_content)
+                send_msg(care_plan_content)
 
                 f = (
                     session.query(WhatsappCareplan)
@@ -766,8 +897,6 @@ def bot_post():
                 return {"status": "success"}
 
         return {"status": "success"}
-
-    print("this is nice")
 
     latest_start = (
         session.query(WhatsApp)
@@ -813,7 +942,7 @@ def bot_post():
 
     response = doc_response
 
-    send_whatsapp_msg(from_number, response)
+    send_msg(response)
 
     # save convo to db
     user_text = WhatsApp(from_number=from_number, content=text, role="user")
