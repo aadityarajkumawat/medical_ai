@@ -1,7 +1,5 @@
 from langchain_openai import ChatOpenAI
-from agents.main import doctor
-from crewai import Task
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 
 llm = ChatOpenAI(model_name="gpt-3.5-turbo", max_tokens=100)
 

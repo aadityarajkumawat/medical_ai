@@ -1,0 +1,2 @@
+[phases.setup]
+aptPkgs = ["ffmpeg", "libc6", "lame", "flac", "vorbis-tools"]

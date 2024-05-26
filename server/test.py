@@ -1,56 +1,28 @@
-from gradio_client import Client
+import replicate
 
-d = {"this": "is a value"}
+import os
+import dotenv
 
-client = Client(
-    "https://adityaedy01-mms.hf.space/",
-    hf_token="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",
+dotenv.load_dotenv()
+
+os.environ["REPLICATE_API_TOKEN"] = os.getenv("REPLICATE_API_TOKEN")
+
+
+def image_to_text(image_path: str):
+    input = {"image": image_path, "prompt": "Describe this image."}
+    output = replicate.run(
+        "lucataco/moondream2:392a53ac3f36d630d2d07ce0e78142acaccc338d6caeeb8ca552fe5baca2781e",
+        input=input,
+    )
+
+    response = ""
+
+    for line in output:
+        response += line
+
+    print(response)
+
+
+image_to_text(
+    "https://replicate.delivery/pbxt/KZKNhDQHqycw8Op7w056J8YTX5Bnb7xVcLiyB4le7oUgT2cY/moondream2.png"
 )
-# out = client.view_api(return_format="str")
-
-# with open("api.json", "w") as f:
-#     f.write(out)
-
-
-result = client.predict(
-    "haye, sidee wax u socdaan?", "som (Somali)", 1, api_name="/predict_1"
-)
-
-audio_path, text = result
-
-print(audio_path, text)
-
-from pydub import AudioSegment
-
-
-def convert_wav_to_mp3(wav_file_path, mp3_file_path):
-    # Load the WAV file
-    audio = AudioSegment.from_wav(wav_file_path)
-
-    # Export as MP3
-    audio.export(mp3_file_path, format="mp3")
-    print(f"Converted {wav_file_path} to {mp3_file_path}")
-
-
-convert_wav_to_mp3(audio_path, "./output.mp3")
-# i = 0
-# while result.running():
-#     i += 1
-
-# print(result.result())
-
-
-# client = Client("abidlabs/whisper-large-v2")  # connecting to a Hugging Face Space
-# d = client.predict("/Users/aditya/me.m4a", api_name="/predict")
-
-# print(d)
-
-client = Client("https://adityaedy01-mms.hf.space/")
-result = client.predict(
-    "Record from Mic",  # str  in 'Audio input' Radio component
-    "/Users/aditya/me.m4a",  # str (filepath or URL to file) in 'Use mic' Audio component
-    "/Users/aditya/me.m4a",  # str (filepath or URL to file) in 'Upload file' Audio component
-    "eng (English)",
-    api_name="/predict",
-)
-print(result)

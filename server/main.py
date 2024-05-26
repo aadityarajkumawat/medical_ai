@@ -1,27 +1,6 @@
-# import os
-# from dotenv import load_dotenv
-
-# load_dotenv()
-
-# chat = """
-# Doctor-Patient Chat
-# Patient: I have a sinus infection and need something to knock it out.
-# Doctor: Hi melissa thank you for starting a visit. I am so sorry to hear about your sinus infection. How long have you had the symptoms for?
-# Patient: Since Sunday
-# Doctor: Ah I see. Which symptoms do you have at present?
-# Patient: My face is swollen, my cheeks hurt, my eyelids are swollen, and I am running a slight fever, and I can feel something draining down the back of my throat
-# """
-
-# summary = summarizer(22, "Female", chat)
-# print(summary)
-
-# careplan = generate_final_careplan(22, "Female", chat)
-# print(careplan)
-
 from __future__ import annotations
-import threading
-from flask import Flask, request
-import math, random, os
+from flask import Flask, request, send_from_directory, jsonify
+import os
 from dotenv import load_dotenv
 from typing import List
 
@@ -29,11 +8,12 @@ from gradio_client import Client
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
+import replicate
+
 from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
-from sqlalchemy.orm import DeclarativeBase
 
 from engine.summarizer import summarizer
 from engine.careplan import generate_final_careplan
@@ -46,37 +26,9 @@ import requests
 load_dotenv()
 
 os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
+os.environ["REPLICATE_API_TOKEN"] = os.getenv("REPLICATE_API_TOKEN")
 
 app = Flask(__name__)
-
-SYSTEM_PROMPT = """You are a Reasoning + Acting (React) Chain Bot. You have to be interactive so ask the queries one by one from the user to reach to the final answer. Please provide a single Thought and single Action to the user so that the user can search the query of the action and provide you with the observation.
-
-For example the chain would be like this:
-
-User: Hi, I've been experiencing persistent headaches.
-Assistant: Have you been drinking plenty of water?
-User: Yes, I have been drinking plenty of water.
-Assistant: What is your sleep schedule like?
-User: I try to get min 8 hours of sleep.
-Assistant: What is your screen time like?
-User: I spends long hours in front of a computer screen but doesn't report significant eye strain.
-Assistant: Considering your screen time, prolonged exposure to screens could lead to digital eye strain and headaches.
-User: I will try to reduce my screen time.
-Assistant: [STOP]
-
-User: Hi, I've been having knee pain lately.
-Assistant: Have you recently engaged in any strenuous physical activity?
-User: No, I haven't.
-Assistant: Do you have any history of previous knee injuries or surgeries?
-User: Yes, I injured my knee playing sports several years ago.
-Assistant: Have you noticed any swelling or instability in the knee?
-User: Yes, I experience occasional swelling and feelings of instability.
-Assistant: Given your history of a previous knee injury and current symptoms, there may be underlying issues such as osteoarthritis or ligament damage. I advise you to consult with a healthcare professional for a proper diagnosis and treatment plan.
-User: Thank you, I will schedule an appointment with my doctor.
-Assistant: [STOP]
-
-"""
-
 
 import datetime
 import uuid
@@ -93,10 +45,12 @@ import datetime as dt
 from sqlalchemy.orm import declarative_base, relationship, mapped_column
 from sqlalchemy.orm import sessionmaker
 
+import redis
+
+r = redis.from_url(os.getenv("REDIS_URL"))
+
 from flask_cors import CORS
 
-# add cors
-# Add CORS
 CORS(app)
 
 
@@ -126,6 +80,24 @@ base = declarative_base()
 
 factory = sessionmaker(bind=engine)
 session = factory()
+
+import uuid
+
+
+def image_to_text(image_path: str):
+    input = {"image": image_path, "prompt": "Describe this image."}
+    output = replicate.run(
+        "lucataco/moondream2:392a53ac3f36d630d2d07ce0e78142acaccc338d6caeeb8ca552fe5baca2781e",
+        input=input,
+    )
+
+    response = ""
+
+    for line in output:
+        response += line
+
+    print(response)
+    return response
 
 
 class UserProfile(base):
@@ -234,16 +206,6 @@ class WhatsappSummary(base):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
 
 
-# class TechnicianRequest(base):
-#     __tablename__ = "TechnicianRequest"
-#     id = Column("id", String, primary_key=True)
-#     name = Column("name", String)
-#     email = Column("email", String)
-#     phone = Column("phone", String)
-#     zipcode = Column("zipcode", String)
-#     timestamp = Column("timestamp", DateTime)
-
-
 engine.connect()
 
 base.metadata.create_all(engine)
@@ -252,6 +214,34 @@ client = Client(
     "https://adityaedy01-mms.hf.space/",
     hf_token=os.getenv("HF_TOKEN"),
 )
+
+MMS_URL = "https://api-inference.huggingface.co/models/facebook/mms-1b-all"
+headers = {"Authorization": "Bearer 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"}
+
+import subprocess
+
+
+def flac_to_mp3(flac_path: str):
+    # convert flac to mp3
+    print("CONVERTING", flac_path, "to mp3")
+    mp3_path = flac_path.replace(".flac", ".mp3")
+    script = "scripts/flactomp3"
+    subprocess.run([script, flac_path.replace(".flac", "")])
+    return mp3_path
+
+
+@app.route("/cmd", methods=["POST"])
+def cmd():
+    json = request.json
+    cmd = json["cmd"]
+    d = subprocess.run(
+        cmd.split(" "),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        encoding="utf-8",
+        text=True,
+    )
+    return jsonify({"out": d.stdout, "err": d.stderr, "in": d.args})
 
 
 @app.route("/")
@@ -500,44 +490,33 @@ def send_whatsapp_msg(id: str, from_number: str):
     return wr
 
 
-from pydub import AudioSegment
-
-
-def convert_wav_to_mp3(wav_file_path, mp3_file_path):
-    # Load the WAV file
-    audio = AudioSegment.from_wav(wav_file_path)
-
-    # Export as MP3
-    audio.export(mp3_file_path, format="mp3")
-    print(f"Converted {wav_file_path} to {mp3_file_path}")
-
-
-def convert_ogg_to_mp3(ogg_file_path, mp3_file_path):
-    # Load the WAV file
-    audio = AudioSegment.from_ogg(ogg_file_path)
-
-    # Export as MP3
-    audio.export(mp3_file_path, format="mp3")
-    print(f"Converted {ogg_file_path} to {mp3_file_path}")
-
-
 def speech_to_text(audio_path: str):
     res = client.predict(
         "Record from Mic",
         audio_path,
         audio_path,
-        "som (Somali)",
+        "eng (English)",
         api_name="/predict",
     )
     print("SPEECH TO TEXT:", res)
     return res
 
 
-import uuid
-import urllib.request
+def text_to_speech(text: str):
+    API_URL = "https://api-inference.huggingface.co/models/facebook/mms-tts-eng"
+    headers = {"Authorization": "Bearer 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"}
+
+    response = requests.post(API_URL, headers=headers, json={"inputs": text})
+
+    audio_path = "audio/" + str(uuid.uuid4()) + ".flac"
+    open(audio_path, "wb").write(response.content)
+
+    flac_to_mp3(audio_path)
+
+    return audio_path.replace(".flac", ".mp3")
 
 
-def get_whatsapp_media_by_id(id: str):
+def get_whatsapp_media_by_id(id: str, media_type="audio"):
     # get url by id
     url = f"https://graph.facebook.com/v19.0/{id}"
 
@@ -548,33 +527,40 @@ def get_whatsapp_media_by_id(id: str):
     response = requests.get(url, headers=headers)
 
     data = response.json()
+    print(data)
     url = data["url"]
+    mine_type = data["mime_type"]
 
     print(url)
 
-    # urllib.request.urlretrieve("http://www.example.com/songs/mp3.mp3", "mp3.mp3")
-
     response = requests.get(url, headers=headers, allow_redirects=True)
-    received_name = str(uuid.uuid4()) + ".ogg"
-    print(response.content)
-    open(f"audio/{received_name}", "wb").write(response.content)
+    if media_type == "audio":
+        received_name = str(uuid.uuid4()) + ".ogg"
+        open(f"audio/{received_name}", "wb").write(response.content)
 
-    convert_ogg_to_mp3(f"audio/{received_name}", f"audio/{received_name}.mp3")
+        return f"audio/{received_name}"
+    else:
+        exts = {
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp",
+        }
 
-    return f"audio/{received_name}.mp3"
+        received_name = str(uuid.uuid4()) + exts[mine_type]
+
+        open(f"images/{received_name}", "wb").write(response.content)
+
+        return f"images/{received_name}"
 
 
 def send_whatsapp_audio(id: str, from_number: str):
     def wr(audio_path: str):
-        # first upload the file
-        file_name = str(uuid.uuid5()) + ".mp3"
-        file_path = f"audio/{file_name}"
-
-        convert_wav_to_mp3(audio_path, file_name)
+        print("UPLOADING FILE", audio_path)
+        file_name = audio_path.split(".")[0]
 
         # upload file
         res = requests.post(
-            url=f"https://graph.facebook.com/v19.0/{id}/messages",
+            url=f"https://graph.facebook.com/v19.0/{id}/media",
             headers={
                 "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
             },
@@ -587,7 +573,7 @@ def send_whatsapp_audio(id: str, from_number: str):
                     "file",
                     (
                         file_name,
-                        open(file_path, "rb"),
+                        open(audio_path, "rb"),
                         "audio/mpeg",
                     ),
                 )
@@ -596,12 +582,43 @@ def send_whatsapp_audio(id: str, from_number: str):
 
         uploaded = res.json()
 
+        print("UPLOADED FILE")
+
         print(uploaded)
 
+        uploaded_id = uploaded["id"]
+
         # get file url
-        # res = requests.get(f"https://graph.facebook.com/v19.0/1155544232454984")
+        print("GETTING FILE URL")
+        response = requests.get(
+            f"https://graph.facebook.com/v19.0/{uploaded_id}",
+            headers={
+                "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
+            },
+        )
+
+        media_data = response.json()
+        print("MEDIA DATA", media_data)
+
+        media_url = media_data["url"]
+        media_id = media_data["id"]
+
+        print("MEDIA URL", media_url)
+        print("SENDING MEDIA")
 
         # send audio
+        requests.post(
+            f"https://graph.facebook.com/v19.0/{id}/messages",
+            headers={
+                "Authorization": f"Bearer {os.getenv('PERMA_TOKEN')}",
+            },
+            json={
+                "type": "audio",
+                "messaging_product": "whatsapp",
+                "to": from_number,
+                "audio": {"id": media_id},
+            },
+        )
 
     return wr
 
@@ -620,9 +637,52 @@ def bot():
     return "Invalid Request"
 
 
+def get_history(text: str, from_number: str):
+    latest_start = (
+        session.query(WhatsApp)
+        .where(WhatsApp.from_number == from_number)
+        .where(WhatsApp.content == "/new")
+        .order_by(WhatsApp.created_at.desc())
+        .first()
+    )
+    convos = (
+        session.query(WhatsApp)
+        .where(WhatsApp.from_number == from_number)
+        .where(WhatsApp.created_at > latest_start.created_at)
+        .order_by(WhatsApp.created_at.asc())
+        .order_by(WhatsApp.role.desc())
+        .all()
+    )
+
+    history = ""
+    history_list = [
+        SystemMessage(
+            "You are a doctor, which that diagnoses patients by asking questions one at a time. Please ask the user questions to diagnose them. Users will start by describing their problem or symptoms."
+        )
+    ]
+    print("----------")
+    print("CONVOS", convos)
+    print("----------")
+
+    for h in convos:
+        history_list.append(
+            HumanMessage(h.content) if h.role == "user" else AIMessage(h.content)
+        )
+        history += h.role + ": " + h.content + "\n"
+
+    history += "user: " + text
+    history_list.append(HumanMessage(text))
+
+    return history_list, history
+
+
+@app.route("/images/<path:path>")
+def send_report(path):
+    return send_from_directory("images", path)
+
+
 @app.route("/bot", methods=["POST"])
 def bot_post():
-    print("cool")
     json = request.json
 
     import json as j
@@ -632,35 +692,98 @@ def bot_post():
     value = json["entry"][0]["changes"][0]["value"]
 
     if not "messages" in value:
-        return {"status": "success"}
+        return {"status": "success"}, 200
 
-    messages = value["messages"]
     meta = value["metadata"]
-
     phone_id = meta["phone_number_id"]
 
+    messages = value["messages"]
     from_number = messages[0]["from"]
     timestamp = messages[0]["timestamp"]
 
     send_audio = send_whatsapp_audio(id=phone_id, from_number=from_number)
+    send_msg = send_whatsapp_msg(id=phone_id, from_number=from_number)
+
+    process = r.get(phone_id)
+    if process != None:
+        msg = "Please wait..."
+        if process == "summary_worker":
+            msg = "Generating summary..."
+        if process == "careplan_worker":
+            msg = "Generating careplan..."
+        if process == "audio_worker":
+            msg = "Generating response..."
+
+        print("PROCESS RUNNING: ", process)
+        send_msg(msg)
+        return {"status": "success"}, 200
 
     if "audio" in messages[0]:
         print("reply audio")
 
         audio_received_id = messages[0]["audio"]["id"]
 
+        r.set(phone_id, "audio_worker", ex=120)
+
         received_audio_file = get_whatsapp_media_by_id(audio_received_id)
         text_received = speech_to_text(received_audio_file)
 
-        # send_audio()
-        return {"status": "success"}
+        history_list, history = get_history(text_received, from_number)
+
+        doc_response = get_doctor_response(history_list)
+
+        response = doc_response
+
+        audio_response_path = text_to_speech(response)
+        send_audio(audio_response_path)
+
+        # save convo to db
+        user_text = WhatsApp(
+            from_number=from_number, content=text_received, role="user"
+        )
+        assistant_text = WhatsApp(
+            from_number=from_number, content=response, role="assistant"
+        )
+
+        session.add(user_text)
+        session.add(assistant_text)
+
+        session.commit()
+
+        r.delete(phone_id)
+
+        return {"status": "success"}, 200
+
+    if "image" in messages[0]:
+        image_received_id = messages[0]["image"]["id"]
+        r.set(phone_id, "image_worker", ex=120)
+
+        received_image_file = get_whatsapp_media_by_id(
+            image_received_id, media_type="image"
+        )
+        print("GENERATING RESPONSE")
+
+        prod = True
+
+        base_url = (
+            "https://flask-production-213b.up.railway.app/"
+            if prod
+            else "http://localhost:5001/"
+        )
+
+        public_url = base_url + received_image_file
+
+        description = image_to_text(public_url)
+        print("DESCRIPTION", description)
+        send_msg(msg=str(description))
+
+        r.delete(phone_id)
+
+        return {"status": "success"}, 200
 
     text = messages[0]["text"]["body"]
 
-    send_msg = send_whatsapp_msg(id=phone_id, from_number=from_number)
-
     # find if there's any response after this timestamp
-
     msg_t = dt.datetime.fromtimestamp(int(timestamp))
 
     g = (
@@ -671,38 +794,14 @@ def bot_post():
     )
     if g is not None:
         print("DUPLICATE MESSAGE!")
-        return {"status": "success"}
-
-    print(text)
-
-    # check if careplan is being generated!
-    ca = (
-        session.query(WhatsappCareplan)
-        .where(WhatsappCareplan.from_number == from_number)
-        .where(WhatsappCareplan.careplan == "generating")
-        .first()
-    )
-    if ca is not None:
-        print("CAREPLAN GENERATING!")
-        return {"status": "success"}
-
-    cs = (
-        session.query(WhatsappSummary)
-        .where(WhatsappSummary.from_number == from_number)
-        .where(WhatsappSummary.summary == "generating")
-        .first()
-    )
-
-    if cs is not None:
-        print("SUMMARY GENERATING!")
-        return {"status": "success"}
+        return {"status": "success"}, 200
 
     if text == "/help":
         print("HELP!")
         send_msg(
             msg="You can use the following commands to interact:\n\n/new: Start a new conversation\n\n/careplan: Get a careplan based on your conversation\n\n/[age][gender(M or F)]: To update profile details\n\n/help: Get help on how to use the bot\n",
         )
-        return {"status": "success"}
+        return {"status": "success"}, 200
 
     if len(text) == 4 and text[0] == "/" and text != "/new":
         print("REGISTERING AGE AND GENDER!")
@@ -712,40 +811,21 @@ def bot_post():
 
             send_msg(msg="Thanks for providing your age and gender!")
 
-            wh = WhatsApp(
-                from_number=from_number,
-                content="Thanks for providing your age and gender!",
-                role="assistant",
-                gender=gender,
-                age=age,
-            )
+            r.set(f"age_{phone_id}", age)
+            r.set(f"gender_{phone_id}", gender)
 
-            session.add(wh)
-            session.commit()
+        return {"status": "success"}, 200
 
-        return {"status": "success"}
+    # ask for age and gender is its the first message
+    # msg = session.query(WhatsApp).where(WhatsApp.from_number == from_number).first()
+    age = r.get(f"age_{phone_id}")
+    gender = r.get(f"gender_{phone_id}")
 
-    history = ""
-
-    # get a message
-    msg = session.query(WhatsApp).where(WhatsApp.from_number == from_number).first()
-
-    if msg is not None:
-        print("CHECK IF AGE AND GENDER ARE SET!")
-        # check
-        mm = (
-            session.query(WhatsApp)
-            .where(WhatsApp.from_number == from_number)
-            .where(WhatsApp.age != None)
-            .where(WhatsApp.gender != None)
-            .first()
+    if age is None or gender is None:
+        send_msg(
+            msg="Please provide your age and gender in the following format (/18M, for age 18 and gender male, and /24F for age 24 and gender female)",
         )
-        if mm is None:
-            print("ASKING FOR AGE AND GENDER!")
-            send_msg(
-                msg="Please provide your age and gender in the following format (/18M, for age 18 and gender male, and /24F for age 24 and gender female)",
-            )
-            return {"status": "success"}
+        return {"status": "success"}, 200
 
     if text == "/new":
         print("STARTING NEW CONVO!")
@@ -758,7 +838,7 @@ def bot_post():
         session.add(user_text)
         session.commit()
 
-        return {"status": "success"}
+        return {"status": "success"}, 200
     elif text == "/summary":
         print("GETTING SUMMARY!")
         # get history
@@ -799,15 +879,11 @@ def bot_post():
                 .first()
             )
 
-            print(history)
-
             if mm is not None:
                 age = mm.age
                 gender = mm.gender
 
-                s = WhatsappSummary(from_number=from_number, summary="generating")
-                session.add(s)
-                session.commit()
+                r.set(phone_id, "summary_worker", ex=360)
 
                 carep = summarizer(age, gender, history)
 
@@ -820,13 +896,15 @@ def bot_post():
                 )
                 session.commit()
 
+                r.delete(phone_id)
+
                 print(f)
 
-                return {"status": "success"}
+                return {"status": "success"}, 200
             else:
-                return {"status": "success"}
+                return {"status": "success"}, 200
 
-        return {"status": "success"}
+        return {"status": "success"}, 200
     elif text == "/careplan":
         print("GETTING CAREPLAN!")
         # get history
@@ -869,15 +947,11 @@ def bot_post():
                 .first()
             )
 
-            print(history)
-
             if mm is not None:
                 age = mm.age
                 gender = mm.gender
 
-                s = WhatsappCareplan(from_number=from_number, careplan="generating")
-                session.add(s)
-                session.commit()
+                r.set(phone_id, "careplan_worker", ex=360)
 
                 care_plan_content = generate_final_careplan(age, gender, history)
 
@@ -890,53 +964,17 @@ def bot_post():
                 )
                 session.commit()
 
+                r.delete(phone_id)
+
                 print(f)
 
-                return {"status": "success"}
+                return {"status": "success"}, 200
             else:
-                return {"status": "success"}
+                return {"status": "success"}, 200
 
-        return {"status": "success"}
+        return {"status": "success"}, 200
 
-    latest_start = (
-        session.query(WhatsApp)
-        .where(WhatsApp.from_number == from_number)
-        .where(WhatsApp.content == "/new")
-        .order_by(WhatsApp.created_at.desc())
-        .first()
-    )
-    convos = (
-        session.query(WhatsApp)
-        .where(WhatsApp.from_number == from_number)
-        .where(WhatsApp.created_at > latest_start.created_at)
-        .order_by(WhatsApp.created_at.asc())
-        .order_by(WhatsApp.role.desc())
-        .all()
-    )
-
-    history = ""
-    history_list = [
-        SystemMessage(
-            "You are a doctor, which that diagnoses patients by asking questions one at a time. Please ask the user questions to diagnose them. Users will start by describing their problem or symptoms."
-        )
-    ]
-    i = 0
-    print("----------")
-    print("CONVOS", convos)
-    print("----------")
-    for h in convos:
-        history_list.append(
-            HumanMessage(h.content) if h.role == "user" else AIMessage(h.content)
-        )
-        history += h.role + ": " + h.content + "\n"
-        i += 1
-
-    history += "Patient: " + text
-    history_list.append(HumanMessage(text))
-    # else:
-    #     history_list.append(HumanMessage(SYSTEM_PROMPT + f"\nUser: {text}"))
-
-    print("HISTORY", history)
+    history_list, history = get_history(text, from_number)
 
     doc_response = get_doctor_response(history_list)
 
@@ -955,8 +993,8 @@ def bot_post():
 
     session.commit()
 
-    return {"status": "success"}
+    return {"status": "success"}, 200
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001)
+    app.run(host="0.0.0.0", port=os.getenv("PORT"))
